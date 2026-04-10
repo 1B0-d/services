@@ -1,0 +1,30 @@
+services:
+  order-db:
+    image: postgres:16
+    container_name: order-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: orderdb
+    ports:
+     - "5435:5432"
+    volumes:
+      - order_db_data:/var/lib/postgresql/data
+
+  payment-db:
+    image: postgres:16
+    container_name: payment-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: paymentdb
+    ports:
+      - "5434:5432"
+    volumes:
+      - payment_db_data:/var/lib/postgresql/data
+
+volumes:
+  order_db_data:
+  payment_db_data:

@@ -92,18 +92,7 @@ Order flow:
 
 ## Architecture Diagram
 
-```mermaid
-flowchart LR
-    C[Client / Postman] -->|HTTP :8080| OHTTP[order-service HTTP API]
-    OHTTP --> OUC[Order Use Case]
-    OUC --> ODB[(orderdb)]
-
-    OUC -->|gRPC ProcessPayment :50051| PGRPC[payment-service gRPC Server]
-    PGRPC --> PUC[Payment Use Case]
-    PUC --> PDB[(paymentdb)]
-
-    G[grpcurl / streaming client] -->|SubscribeToOrderUpdates :50052| OGRPC[order-service gRPC Server]
-    OGRPC --> OUC
+![alt text](image-4.png)
 
 ## Protobuf and Generated Code
 

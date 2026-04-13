@@ -40,8 +40,9 @@ func main() {
 	paymentUsecase := usecase.NewPaymentUsecase(paymentRepo)
 	paymentHandler := transporthttp.NewPaymentHandler(paymentUsecase)
 
+	paymentGRPCHost := getEnv("PAYMENT_GRPC_ADDR", "0.0.0.0")
 	grpcPort := getEnv("PAYMENT_GRPC_PORT", "50051")
-	grpcLis, err := net.Listen("tcp", ":"+grpcPort)
+	grpcLis, err := net.Listen("tcp", net.JoinHostPort(paymentGRPCHost, grpcPort))
 	if err != nil {
 		log.Fatalf("failed to listen grpc: %v", err)
 	}

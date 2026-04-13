@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -17,12 +18,14 @@ var ErrPaymentServiceUnavailable = errors.New("payment service unavailable")
 type OrderUsecase struct {
 	repo           domain.OrderRepository
 	paymentService domain.PaymentService
+	publisher      domain.OrderStatusPublisher
 }
 
-func NewOrderUsecase(repo domain.OrderRepository, paymentService domain.PaymentService) *OrderUsecase {
+func NewOrderUsecase(repo domain.OrderRepository, paymentService domain.PaymentService, publisher domain.OrderStatusPublisher) *OrderUsecase {
 	return &OrderUsecase{
 		repo:           repo,
 		paymentService: paymentService,
+		publisher:      publisher,
 	}
 }
 
@@ -42,6 +45,7 @@ func (u *OrderUsecase) CreateOrder(customerID, itemName string, amount int64) (*
 	if err := u.repo.Create(order); err != nil {
 		return nil, err
 	}
+	u.notifyOrderUpdate(order)
 
 	paymentResult, err := u.paymentService.CreatePayment(order.ID, order.Amount)
 	if err != nil {
@@ -54,6 +58,7 @@ func (u *OrderUsecase) CreateOrder(customerID, itemName string, amount int64) (*
 			return nil, err
 		}
 		order.Status = domain.OrderStatusPaid
+		u.notifyOrderUpdate(order)
 		return order, nil
 	}
 
@@ -61,6 +66,7 @@ func (u *OrderUsecase) CreateOrder(customerID, itemName string, amount int64) (*
 		return nil, err
 	}
 	order.Status = domain.OrderStatusFailed
+	u.notifyOrderUpdate(order)
 
 	return order, nil
 }
@@ -96,5 +102,20 @@ func (u *OrderUsecase) CancelOrder(id string) (*domain.Order, error) {
 	}
 
 	order.Status = domain.OrderStatusCancelled
+	u.notifyOrderUpdate(order)
 	return order, nil
+}
+
+func (u *OrderUsecase) SubscribeToOrderUpdates(orderID string, ctx context.Context) (<-chan *domain.Order, error) {
+	if u.publisher == nil {
+		return nil, errors.New("order updates publisher not configured")
+	}
+	return u.publisher.Subscribe(orderID, ctx)
+}
+
+func (u *OrderUsecase) notifyOrderUpdate(order *domain.Order) {
+	if u.publisher == nil {
+		return
+	}
+	_ = u.publisher.Publish(order)
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 
+	"order-service/internal/pubsub"
 	"order-service/internal/repository"
 	transportgrpc "order-service/internal/transport/grpc"
 	transporthttp "order-service/internal/transport/http"
@@ -22,7 +23,12 @@ import (
 func main() {
 	dbURL := getEnv("ORDER_DB_URL", "postgres://postgres:postgres@localhost:5435/orderdb?sslmode=disable")
 	port := getEnv("ORDER_SERVICE_PORT", "8080")
-	paymentServiceGRPCAddress := getEnv("PAYMENT_SERVICE_GRPC_ADDRESS", "localhost:50051")
+	paymentServiceGRPCAddress := os.Getenv("PAYMENT_SERVICE_GRPC_ADDRESS")
+	if paymentServiceGRPCAddress == "" {
+		paymentServiceGRPCHost := getEnv("PAYMENT_GRPC_ADDR", "localhost")
+		paymentServiceGRPCPort := getEnv("PAYMENT_GRPC_PORT", "50051")
+		paymentServiceGRPCAddress = net.JoinHostPort(paymentServiceGRPCHost, paymentServiceGRPCPort)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -47,7 +53,8 @@ func main() {
 		_ = paymentClient.Close()
 	}()
 
-	orderUsecase := usecase.NewOrderUsecase(orderRepo, paymentClient)
+	notifier := pubsub.NewOrderStatusBroadcaster()
+	orderUsecase := usecase.NewOrderUsecase(orderRepo, paymentClient, notifier)
 	orderHandler := transporthttp.NewOrderHandler(orderUsecase)
 
 	orderGRPCPort := getEnv("ORDER_GRPC_PORT", "50052")

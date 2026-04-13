@@ -21,13 +21,13 @@ func NewPaymentGRPCServer(usecase *usecase.PaymentUsecase) *PaymentGRPCServer {
 	return &PaymentGRPCServer{usecase: usecase}
 }
 
-func (s *PaymentGRPCServer) CreatePayment(ctx context.Context, req *pb.CreatePaymentRequest) (*pb.CreatePaymentResponse, error) {
+func (s *PaymentGRPCServer) ProcessPayment(ctx context.Context, req *pb.CreatePaymentRequest) (*pb.CreatePaymentResponse, error) {
 	payment, err := s.usecase.CreatePayment(req.OrderId, req.Amount)
 	if err != nil {
 		if err == usecase.ErrInvalidAmount {
 			return nil, status.Error(codes.InvalidArgument, err.Error())
 		}
-		return nil, status.Error(codes.Internal, "failed to create payment")
+		return nil, status.Error(codes.Internal, "failed to process payment")
 	}
 
 	return &pb.CreatePaymentResponse{Payment: toPaymentProto(payment)}, nil

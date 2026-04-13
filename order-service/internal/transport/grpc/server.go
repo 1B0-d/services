@@ -66,6 +66,35 @@ func (s *OrderGRPCServer) GetOrdersByCustomerID(ctx context.Context, req *pb.Get
 	return &pb.GetOrdersByCustomerResponse{Orders: response}, nil
 }
 
+func (s *OrderGRPCServer) SubscribeToOrderUpdates(req *pb.GetOrderRequest, stream pb.OrderService_SubscribeToOrderUpdatesServer) error {
+	order, err := s.usecase.GetOrderByID(req.Id)
+	if err != nil {
+		switch err {
+		case usecase.ErrOrderNotFound:
+			return status.Error(codes.NotFound, err.Error())
+		default:
+			return status.Error(codes.Internal, err.Error())
+		}
+	}
+
+	if err := stream.Send(toOrderProto(order)); err != nil {
+		return err
+	}
+
+	updates, err := s.usecase.SubscribeToOrderUpdates(req.Id, stream.Context())
+	if err != nil {
+		return status.Error(codes.Internal, "failed to subscribe to order updates")
+	}
+
+	for update := range updates {
+		if err := stream.Send(toOrderProto(update)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func toOrderProto(order *domain.Order) *pb.Order {
 	if order == nil {
 		return nil

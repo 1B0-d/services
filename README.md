@@ -26,9 +26,9 @@ This project was migrated from HTTP-based inter-service communication to gRPC.
 ### After the migration
 - protobuf contracts were added to `ap_protos/proto/`
 - generated Go code was placed in `ap-pb/`
-- `payment-service` now exposes a gRPC server
+- `payment-service` now exposes a gRPC server with `ProcessPayment`
 - `order-service` now uses a gRPC client to call `payment-service`
-- `order-service` also exposes its own gRPC server
+- `order-service` also exposes its own gRPC server with streaming support for order updates
 - documentation and architecture diagrams were updated accordingly
 
 ---
@@ -78,7 +78,7 @@ Order flow:
 
 1. Client sends `POST /orders` to `order-service`
 2. `order-service` creates a new order with status `Pending`
-3. `order-service` calls `payment-service` via gRPC `CreatePayment`
+3. `order-service` calls `payment-service` via gRPC `ProcessPayment`
 4. `payment-service` processes the payment and returns a result
 5. `order-service` updates the order status:
    - `Paid` if payment is authorized
@@ -87,8 +87,8 @@ Order flow:
 
 ### gRPC Ports
 
-- `payment-service` gRPC port: `50051`
-- `order-service` gRPC port: `50052`
+- `payment-service` gRPC port: `50051` (configurable with `PAYMENT_GRPC_ADDR` and `PAYMENT_GRPC_PORT`)
+- `order-service` gRPC port: `50052` (configurable with `ORDER_GRPC_PORT`)
 
 ---
 
@@ -98,6 +98,19 @@ Order flow:
 - generated Go code is stored in `ap-pb/`
 - both services use a local `replace` directive in `go.mod`:
   `replace github.com/1B0-d/ap-pb => ../../ap-pb`
+
+## Repository Links
+
+- `proto` repository: `https://github.com/1B0-d/protos`
+- `generated` repository: `https://github.com/1B0-d/ap-pb`
+
+> Replace the URLs above with the actual GitHub repository addresses for your proto definitions and generated Go package.
+
+## Proto Generation
+
+- Run local generation inside `ap_protos/` with `make generate` or `protoc` if available.
+- Generated code is committed into `ap-pb/` so services can import it locally.
+- For the best score, add a GitHub Actions workflow that runs `protoc` remotely and updates `ap-pb/` automatically.
 
 ---
 
@@ -296,7 +309,33 @@ grpcurl -plaintext localhost:50051 payment.PaymentService/ProcessPayment \
 ```
 
 ---
+## Evidence / Screenshots
 
+### 1. Successful order creation
+This screenshot shows a successful `POST /orders` request.  
+The order is created and returned with status `Paid`, which confirms that `order-service` successfully communicated with `payment-service` via gRPC.
+
+![Successful order creation](docs/201_created.png)
+![alt text](image.png)
+
+### 2. Get orders by customer
+This screenshot shows the `GET /orders?customer_id=...` endpoint returning all orders for a given customer.
+
+![Get orders by customer](docs/get_method.png)
+![alt text](image-1.png)
+### 3. Real-time gRPC streaming updates
+This screenshot shows the `SubscribeToOrderUpdates` gRPC streaming call.  
+The same order is first received with status `PENDING` and then updated to `CANCELLED`, which demonstrates real-time server-side streaming.
+
+![Streaming updates](docs/stream_pending_and_canceled.png)
+![alt text](image-2.png)
+### 4. Payment service unavailable handling
+This screenshot shows the case when `payment-service` is unavailable.  
+`order-service` returns `503 Service Unavailable`, and the order remains in `Pending` state.
+
+![Payment service unavailable](docs/503_service_Unavaiable.png)
+![alt text](image-3.png)
+---
 ## What is complete
 
 - internal communication migrated from HTTP to gRPC

@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type Order struct {
 	ID         string
@@ -35,4 +38,9 @@ type PaymentResult struct {
 
 type PaymentService interface {
 	CreatePayment(orderID string, amount int64) (*PaymentResult, error)
+}
+
+type OrderStatusPublisher interface {
+	Publish(order *Order) error
+	Subscribe(orderID string, ctx context.Context) (<-chan *Order, error)
 }

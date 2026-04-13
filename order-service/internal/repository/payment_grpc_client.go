@@ -47,7 +47,7 @@ func (c *PaymentGRPCClient) CreatePayment(orderID string, amount int64) (*domain
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	resp, err := c.client.CreatePayment(ctx, &pb.CreatePaymentRequest{
+	resp, err := c.client.ProcessPayment(ctx, &pb.CreatePaymentRequest{
 		OrderId: orderID,
 		Amount:  amount,
 	})

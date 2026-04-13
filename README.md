@@ -1,135 +1,134 @@
-# AP2 Assignment 1 — Clean Architecture based Microservices (Order & Payment)
+﻿# AP2 Assignment 1 — Order & Payment Microservices with gRPC
 
 ## Overview
 
-This project implements a two-service platform in Go:
+This project implements two Go microservices:
 
-- **Order Service**
-- **Payment Service**
+- `order-service`
+- `payment-service`
 
-The system follows **Clean Architecture** and **microservice decomposition**.
-Each service has its own responsibility, its own data, and its own database.
-The communication between services is implemented using **REST** with **Gin** and a custom HTTP client timeout.
+The services follow **Clean Architecture** principles and are separated by bounded contexts.
+Each service owns its own data and database.
+The internal service-to-service communication is implemented using **gRPC** and Protocol Buffers.
+External clients can still use HTTP endpoints exposed by both services.
 
 ---
 
-## Services
+## What Changed
 
-### 1. Order Service
+This project was migrated from HTTP-based inter-service communication to gRPC.
 
+### Before the migration
+- `order-service` called `payment-service` over HTTP
+- the communication used manual JSON serialization and HTTP requests
+- the internal service call was synchronous REST
+
+### After the migration
+- protobuf contracts were added to `ap_protos/proto/`
+- generated Go code was placed in `ap-pb/`
+- `payment-service` now exposes a gRPC server
+- `order-service` now uses a gRPC client to call `payment-service`
+- `order-service` also exposes its own gRPC server
+- documentation and architecture diagrams were updated accordingly
+
+---
+
+## Service Responsibilities
+
+### Order Service
 Responsible for:
 
 - creating orders
 - storing orders in its own database
-- calling Payment Service through HTTP
+- calling `payment-service` to process payments
 - updating order status based on payment result
-- returning order details
+- returning order details to clients
 - cancelling only pending orders
 
-Supported endpoints:
+HTTP endpoints:
 
 - `POST /orders`
 - `GET /orders/{id}`
 - `PATCH /orders/{id}/cancel`
 
-### 2. Payment Service
-
+### Payment Service
 Responsible for:
 
 - processing payment requests
-- validating payment limits
-- storing payment information in its own database
-- returning payment status for an order
+- applying payment rules
+- storing payment records in its own database
+- returning payment status for a specific order
 
-Supported endpoints:
+HTTP endpoints:
 
 - `POST /payments`
 - `GET /payments/{order_id}`
 
 ---
 
-## Clean Architecture
+## How It Works Now
 
-Each service is organized using the following layers:
+### External Client
+External clients interact with `order-service` over HTTP.
 
-- **domain** — entities, business interfaces, status constants
-- **usecase** — business logic and state transitions
-- **repository** — persistence logic and outbound HTTP client implementation
-- **transport/http** — handlers, request parsing, response formatting, routes
-- **cmd/.../main.go** — composition root and manual dependency injection
+### Internal Communication
+`order-service` calls `payment-service` using gRPC instead of HTTP.
 
-This means:
+Order flow:
 
-- handlers stay thin
-- business logic lives in use cases
-- persistence lives in repository layer
-- domain models do not depend on HTTP or framework code
-- use cases depend on interfaces (ports)
+1. Client sends `POST /orders` to `order-service`
+2. `order-service` creates a new order with status `Pending`
+3. `order-service` calls `payment-service` via gRPC `CreatePayment`
+4. `payment-service` processes the payment and returns a result
+5. `order-service` updates the order status:
+   - `Paid` if payment is authorized
+   - `Failed` if payment is declined
+   - `Pending` if payment service is unavailable
 
----
+### gRPC Ports
 
-## Bounded Contexts and Data Ownership
-
-This system is decomposed into **two bounded contexts**:
-
-### Order Context
-Owns:
-- order creation
-- order lifecycle
-- order statuses (`Pending`, `Paid`, `Failed`, `Cancelled`)
-
-### Payment Context
-Owns:
-- payment authorization
-- transaction limits
-- payment records
-- payment statuses (`Authorized`, `Declined`)
-
-### Data ownership
-Each service has its **own database** and its **own internal models**.
-
-- `order-service` uses the `orders` table
-- `payment-service` uses the `payments` table
-
-There is **no shared database** and **no shared common entity package**.
+- `payment-service` gRPC port: `50051`
+- `order-service` gRPC port: `50052`
 
 ---
 
-## Architecture Diagram
+## Protobuf and Generated Code
 
-Client
-  |
-  v
-Order Service HTTP Handlers
-  |
-  v
-Order Use Case
-  |
-  +----> Order Repository ----> Order DB
-  |
-  +----> Payment HTTP Client ----> Payment Service HTTP Handlers
-                                      |
-                                      v
-                                 Payment Use Case
-                                      |
-                                      v
-                               Payment Repository ----> Payment DB
+- `.proto` files are stored in `ap_protos/proto/`
+- generated Go code is stored in `ap-pb/`
+- both services use a local `replace` directive in `go.mod`:
+  `replace github.com/1B0-d/ap-pb => ../../ap-pb`
 
-### Dependency flow inside each service
+---
 
-main.go / Composition Root
-  -> transport/http
-  -> usecase
-  -> interfaces / ports
-  -> repository
-  -> database
+## Clean Architecture Layers
+
+Each service follows a layered structure:
+
+- `domain` — entities, interfaces, and status constants
+- `usecase` — business logic and state transitions
+- `repository` — persistence and outbound gRPC client implementation
+- `transport/http` — HTTP handlers and routes
+- `transport/grpc` — gRPC server implementations
+- `cmd/.../main.go` — composition root and dependency wiring
+
+This structure keeps business rules separate from transport details.
+
+---
+
+## Internal Flow
+
+```
+Client HTTP -> Order Service HTTP -> Order Use Case
+    -> Order Repository -> Order DB
+    -> Payment gRPC Client -> Payment Service gRPC -> Payment Use Case -> Payment DB
+```
 
 ---
 
 ## Domain Models
 
 ### Order
-
 - `ID`
 - `CustomerID`
 - `ItemName`
@@ -144,7 +143,6 @@ Order statuses:
 - `Cancelled`
 
 ### Payment
-
 - `ID`
 - `OrderID`
 - `TransactionID`
@@ -155,89 +153,37 @@ Payment statuses:
 - `Authorized`
 - `Declined`
 
-Money is stored as `int64`, not `float64`.
-
 ---
 
 ## Business Rules
 
 ### Order rules
 - amount must be greater than `0`
-- `Paid` orders cannot be cancelled
 - only `Pending` orders can be cancelled
+- `Paid` orders cannot be cancelled
 
 ### Payment rules
-- if `amount > 100000`, Payment Service returns `Declined`
-- otherwise Payment Service returns `Authorized`
+- `amount > 100000` results in `Declined`
+- otherwise the payment becomes `Authorized`
 
-### Service interaction rule
-- Order Service uses a custom `http.Client` with timeout of **2 seconds**
-
----
-
-## Order Flow
-
-### Successful payment
-1. Client sends `POST /orders`
-2. Order Service creates a new order with status `Pending`
-3. Order Service stores the order in Order DB
-4. Order Service calls `POST /payments`
-5. Payment Service authorizes the payment
-6. Order Service updates the order status to `Paid`
-7. Client receives order response with status `Paid`
-
-### Declined payment
-1. Order is created as `Pending`
-2. Payment Service returns `Declined`
-3. Order Service updates order status to `Failed`
-
-### Payment service unavailable
-1. Order is created as `Pending`
-2. Payment Service call fails or times out
-3. Order Service returns **503 Service Unavailable**
-4. The order remains **Pending**
-
-I chose **Pending** for the payment-unavailable scenario because the order was already created, but payment confirmation was not received due to an external service failure.
-
----
-
-## Why this design was chosen
-
-### Separate databases
-This design avoids tight coupling and follows the **database-per-service** rule.
-Each service is responsible only for its own data.
-
-### No shared code
-Each service has its own models and internal packages, which helps preserve service boundaries.
-
-### Thin handlers
-Handlers only:
-- parse input
-- call use case
-- return HTTP response
-
-Business rules are not placed inside handlers.
-
-### Manual dependency injection
-All dependencies are wired in `main.go`, which acts as the composition root.
-
-### Outbound payment client as a port
-Order Use Case depends on an abstraction for payment calls rather than HTTP details directly.
-This keeps the business logic cleaner and easier to extend or test.
+### Failure handling
+- if the gRPC call to `payment-service` fails, the order stays `Pending`
+- `order-service` returns `503 Service Unavailable`
 
 ---
 
 ## Project Structure
 
+```
 order-service/
 ├── cmd/order-service/main.go
 ├── internal/
 │   ├── domain/
 │   ├── usecase/
 │   ├── repository/
+│   ├── transport/grpc/
 │   └── transport/http/
 ├── migrations/
-│   └── 001_create_orders_table.sql
 └── go.mod
 
 payment-service/
@@ -246,132 +192,126 @@ payment-service/
 │   ├── domain/
 │   ├── usecase/
 │   ├── repository/
-│   └── transport/http/
+│   ├── transport/grpc/
+   └── transport/http/
 ├── migrations/
-│   └── 001_create_payments_table.sql
 └── go.mod
 
----
+ap_protos/
+├── proto/order.proto
+├── proto/payment.proto
+└── Makefile
 
-## Database Schema / Migrations
-
-### Order Service migration
-File: `order-service/migrations/001_create_orders_table.sql`
-
-    CREATE TABLE IF NOT EXISTS orders (
-        id UUID PRIMARY KEY,
-        customer_id VARCHAR(255) NOT NULL,
-        item_name VARCHAR(255) NOT NULL,
-        amount BIGINT NOT NULL,
-        status VARCHAR(50) NOT NULL,
-        created_at TIMESTAMP NOT NULL
-    );
-
-### Payment Service migration
-File: `payment-service/migrations/001_create_payments_table.sql`
-
-    CREATE TABLE IF NOT EXISTS payments (
-        id UUID PRIMARY KEY,
-        order_id VARCHAR(255) NOT NULL UNIQUE,
-        transaction_id VARCHAR(255),
-        amount BIGINT NOT NULL,
-        status VARCHAR(50) NOT NULL
-    );
+ap-pb/
+├── order/
+├── payment/
+└── go.mod
+```
 
 ---
 
-## How to Run
+## Migration Summary
 
-### 1. Start databases
+### Main changes
 
-Use Docker Compose from the project root:
+- replaced `PaymentHTTPClient` with `PaymentGRPCClient`
+- added gRPC server implementations in both services
+- added protobuf contracts and generated code
+- updated service wiring in `main.go`
 
-    docker compose up -d
+### Why gRPC
 
-### 2. Create database tables
+- contracts are defined in `.proto` files
+- no manual JSON serialization for service-to-service calls
+- internal calls are strongly typed
+- easier to maintain and extend
 
-Run the SQL files inside each service database.
+---
 
-### 3. Start Payment Service
+## Running the Services
 
-    cd payment-service
-    go run ./cmd/payment-service
+1. Start the databases:
 
-### 4. Start Order Service
+```bash
+cd AP_assik1
+docker compose up -d
+```
 
-    cd order-service
-    go run ./cmd/order-service
+2. Apply SQL migrations for both services.
+
+3. Run `payment-service`:
+
+```bash
+cd AP_assik1/payment-service
+go run ./cmd/payment-service
+```
+
+4. Run `order-service`:
+
+```bash
+cd AP_assik1/order-service
+go run ./cmd/order-service
+```
 
 ---
 
 ## API Examples
 
-### Create payment
+### HTTP examples
 
-    curl -X POST http://localhost:8081/payments \
-      -H "Content-Type: application/json" \
-      -d "{\"order_id\":\"order-1\",\"amount\":15000}"
+Create an order:
 
-### Get payment by order id
+```bash
+curl -X POST http://localhost:8080/orders \
+  -H "Content-Type: application/json" \
+  -d '{"customer_id":"cust-1","item_name":"Laptop","amount":15000}'
+```
 
-    curl http://localhost:8081/payments/order-1
+Get order:
 
-### Create order
+```bash
+curl http://localhost:8080/orders/{id}
+```
 
-    curl -X POST http://localhost:8080/orders \
-      -H "Content-Type: application/json" \
-      -d "{\"customer_id\":\"cust-1\",\"item_name\":\"Laptop\",\"amount\":15000}"
+Cancel pending order:
 
-### Get order by id
+```bash
+curl -X PATCH http://localhost:8080/orders/{id}/cancel
+```
 
-    curl http://localhost:8080/orders/{id}
+### gRPC examples
 
-### Cancel pending order
+Create an order via gRPC:
 
-    curl -X PATCH http://localhost:8080/orders/{id}/cancel
+```bash
+grpcurl -plaintext localhost:50052 order.OrderService/CreateOrder \
+  -d '{"customer_id":"cust-1","item_name":"Laptop","amount":15000}'
+```
 
----
+Call payment-service directly:
 
-## Tested Scenarios
-
-### Payment success
-- input amount within limit
-- payment status becomes `Authorized`
-- order status becomes `Paid`
-
-### Payment declined
-- input amount greater than `100000`
-- payment status becomes `Declined`
-- order status becomes `Failed`
-
-### Payment service unavailable
-- order service does not hang
-- timeout trips
-- order service returns `503 Service Unavailable`
-- order remains `Pending`
-
-### Cancel order
-- `Pending` order can be cancelled
-- `Paid` order cannot be cancelled
+```bash
+grpcurl -plaintext localhost:50051 payment.PaymentService/ProcessPayment \
+  -d '{"order_id":"order-1","amount":15000}'
+```
 
 ---
 
-## Trade-offs
+## What is complete
 
-- I used synchronous REST communication because it is explicitly required by the assignment.
-- I kept the services small and focused on one responsibility each.
-- I chose **Pending** for the payment-unavailable scenario because the order was already created, but payment confirmation was not received.
-- A possible future improvement would be adding idempotency using an `Idempotency-Key`.
+- internal communication migrated from HTTP to gRPC
+- HTTP APIs remain available for external clients
+- protobuf contracts and generated code are present
+- order-service calls payment-service through gRPC
+- payment-service serves gRPC requests
+- documentation reflects the new architecture
 
 ---
 
-## Submission Contents
-
-This submission includes:
+## Delivered
 
 - source code for both services
-- SQL migration/schema files
-- this README
-- architecture diagram embedded in README
-- curl API examples
-"# services" 
+- SQL migrations
+- protobuf contracts
+- generated gRPC code
+- updated README

@@ -1,0 +1,40 @@
+# .gitignore for ap-project
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+
+# Go
+go.sum
+vendor/
+
+# Build & Development
+bin/
+dist/
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.sqlite
+*.sql.bak
+
+# Docker
+.dockerignore

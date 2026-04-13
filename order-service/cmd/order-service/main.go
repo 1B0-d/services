@@ -3,22 +3,26 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
+	"net"
 	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/grpc"
 
 	"order-service/internal/repository"
+	transportgrpc "order-service/internal/transport/grpc"
 	transporthttp "order-service/internal/transport/http"
 	"order-service/internal/usecase"
+
+	pb "github.com/1B0-d/ap-pb/order"
 )
 
 func main() {
 	dbURL := getEnv("ORDER_DB_URL", "postgres://postgres:postgres@localhost:5435/orderdb?sslmode=disable")
 	port := getEnv("ORDER_SERVICE_PORT", "8080")
-	paymentServiceURL := getEnv("PAYMENT_SERVICE_URL", "http://localhost:8081")
+	paymentServiceGRPCAddress := getEnv("PAYMENT_SERVICE_GRPC_ADDRESS", "localhost:50051")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -35,14 +39,31 @@ func main() {
 
 	orderRepo := repository.NewOrderRepository(dbpool)
 
-	httpClient := &http.Client{
-		Timeout: 2 * time.Second,
+	paymentClient, err := repository.NewPaymentGRPCClient(paymentServiceGRPCAddress)
+	if err != nil {
+		log.Fatalf("failed to connect to payment grpc service: %v", err)
 	}
-
-	paymentClient := repository.NewPaymentHTTPClient(paymentServiceURL, httpClient)
+	defer func() {
+		_ = paymentClient.Close()
+	}()
 
 	orderUsecase := usecase.NewOrderUsecase(orderRepo, paymentClient)
 	orderHandler := transporthttp.NewOrderHandler(orderUsecase)
+
+	orderGRPCPort := getEnv("ORDER_GRPC_PORT", "50052")
+	orderGRPCLis, err := net.Listen("tcp", ":"+orderGRPCPort)
+	if err != nil {
+		log.Fatalf("failed to listen order grpc: %v", err)
+	}
+
+	orderGRPCServer := grpc.NewServer()
+	pb.RegisterOrderServiceServer(orderGRPCServer, transportgrpc.NewOrderGRPCServer(orderUsecase))
+	go func() {
+		log.Printf("order-service grpc running on port %s", orderGRPCPort)
+		if err := orderGRPCServer.Serve(orderGRPCLis); err != nil {
+			log.Fatalf("failed to run order grpc server: %v", err)
+		}
+	}()
 
 	router := gin.Default()
 	transporthttp.RegisterOrderRoutes(router, orderHandler)

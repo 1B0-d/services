@@ -1,12 +1,17 @@
 module order-service
 
-go 1.25.5
+go 1.25.0
 
 require (
+	github.com/1B0-d/ap-pb v0.0.0-00010101000000-000000000000
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.1
+	google.golang.org/grpc v1.80.0
+	google.golang.org/protobuf v1.36.11
 )
+
+replace github.com/1B0-d/ap-pb => ../../ap-pb
 
 require (
 	github.com/bytedance/gopkg v0.1.3 // indirect
@@ -41,5 +46,5 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	google.golang.org/protobuf v1.36.10 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260120221211-b8f7ae30c516 // indirect
 )

@@ -90,7 +90,20 @@ Order flow:
 - `payment-service` gRPC port: `50051` (configurable with `PAYMENT_GRPC_ADDR` and `PAYMENT_GRPC_PORT`)
 - `order-service` gRPC port: `50052` (configurable with `ORDER_GRPC_PORT`)
 
----
+## Architecture Diagram
+
+```mermaid
+flowchart LR
+    C[Client / Postman] -->|HTTP :8080| OHTTP[order-service HTTP API]
+    OHTTP --> OUC[Order Use Case]
+    OUC --> ODB[(orderdb)]
+
+    OUC -->|gRPC ProcessPayment :50051| PGRPC[payment-service gRPC Server]
+    PGRPC --> PUC[Payment Use Case]
+    PUC --> PDB[(paymentdb)]
+
+    G[grpcurl / streaming client] -->|SubscribeToOrderUpdates :50052| OGRPC[order-service gRPC Server]
+    OGRPC --> OUC
 
 ## Protobuf and Generated Code
 
@@ -334,7 +347,7 @@ This screenshot shows the case when `payment-service` is unavailable.
 `order-service` returns `503 Service Unavailable`, and the order remains in `Pending` state.
 
 ![Payment service unavailable](docs/503_service_Unavaiable.png)
-![alt text](image-3.png)
+![alt text](image-3.png)а
 ---
 ## What is complete
 

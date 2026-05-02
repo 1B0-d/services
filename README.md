@@ -236,6 +236,30 @@ Shows `notification-service` being stopped before the durable queue test.
 
 ![Notification service stopped](docs/notification_service_stopped.png)
 
+### Durable message delivered after restart
+
+Shows `notification-service` processing the queued message after it is started again.
+
+![Durable queue delivered after restart](docs/durable_queue_delivered_after_restart.png)
+
+### Idempotency duplicate handling
+
+Shows that the first event is processed once and duplicate deliveries with the same `event_id` are ignored.
+
+![Idempotency duplicate ignored](docs/idempotency_duplicate_ignored.png)
+
+### DLQ processing error
+
+Shows an invalid `payment.completed` event being rejected and moved to the dead-letter queue.
+
+![DLQ processing error log](docs/dlq_processing_error_log.png)
+
+### DLQ message ready
+
+Shows the failed message waiting in `payment.completed.dlq`.
+
+![DLQ message ready](docs/dlq_message_ready.png)
+
 ## Completed Assignment 3 Requirements
 
 - RabbitMQ message broker

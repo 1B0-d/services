@@ -19,18 +19,20 @@ func NewOrderHandler(usecase *usecase.OrderUsecase) *OrderHandler {
 }
 
 type createOrderRequest struct {
-	CustomerID string `json:"customer_id" binding:"required"`
-	ItemName   string `json:"item_name" binding:"required"`
-	Amount     int64  `json:"amount" binding:"required"`
+	CustomerID    string `json:"customer_id" binding:"required"`
+	CustomerEmail string `json:"customer_email" binding:"required,email"`
+	ItemName      string `json:"item_name" binding:"required"`
+	Amount        int64  `json:"amount" binding:"required"`
 }
 
 type orderResponse struct {
-	ID         string    `json:"id"`
-	CustomerID string    `json:"customer_id"`
-	ItemName   string    `json:"item_name"`
-	Amount     int64     `json:"amount"`
-	Status     string    `json:"status"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID            string    `json:"id"`
+	CustomerID    string    `json:"customer_id"`
+	CustomerEmail string    `json:"customer_email"`
+	ItemName      string    `json:"item_name"`
+	Amount        int64     `json:"amount"`
+	Status        string    `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 func (h *OrderHandler) CreateOrder(c *gin.Context) {
@@ -40,7 +42,7 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		return
 	}
 
-	order, err := h.usecase.CreateOrder(req.CustomerID, req.ItemName, req.Amount)
+	order, err := h.usecase.CreateOrder(req.CustomerID, req.CustomerEmail, req.ItemName, req.Amount)
 	if err != nil {
 		switch err {
 		case usecase.ErrInvalidAmount:
@@ -127,11 +129,12 @@ func (h *OrderHandler) CancelOrder(c *gin.Context) {
 
 func toOrderResponse(order *domain.Order) orderResponse {
 	return orderResponse{
-		ID:         order.ID,
-		CustomerID: order.CustomerID,
-		ItemName:   order.ItemName,
-		Amount:     order.Amount,
-		Status:     order.Status,
-		CreatedAt:  order.CreatedAt,
+		ID:            order.ID,
+		CustomerID:    order.CustomerID,
+		CustomerEmail: order.CustomerEmail,
+		ItemName:      order.ItemName,
+		Amount:        order.Amount,
+		Status:        order.Status,
+		CreatedAt:     order.CreatedAt,
 	}
 }

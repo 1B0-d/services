@@ -20,14 +20,15 @@ func NewOrderRepository(db *pgxpool.Pool) *OrderRepository {
 
 func (r *OrderRepository) Create(order *domain.Order) error {
 	query := `
-		INSERT INTO orders (id, customer_id, item_name, amount, status, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO orders (id, customer_id, customer_email, item_name, amount, status, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`
 	_, err := r.db.Exec(
 		context.Background(),
 		query,
 		order.ID,
 		order.CustomerID,
+		order.CustomerEmail,
 		order.ItemName,
 		order.Amount,
 		order.Status,
@@ -38,7 +39,7 @@ func (r *OrderRepository) Create(order *domain.Order) error {
 
 func (r *OrderRepository) GetByID(id string) (*domain.Order, error) {
 	query := `
-		SELECT id, customer_id, item_name, amount, status, created_at
+		SELECT id, customer_id, customer_email, item_name, amount, status, created_at
 		FROM orders
 		WHERE id = $1
 		LIMIT 1
@@ -48,6 +49,7 @@ func (r *OrderRepository) GetByID(id string) (*domain.Order, error) {
 	err := r.db.QueryRow(context.Background(), query, id).Scan(
 		&order.ID,
 		&order.CustomerID,
+		&order.CustomerEmail,
 		&order.ItemName,
 		&order.Amount,
 		&order.Status,
@@ -65,7 +67,7 @@ func (r *OrderRepository) GetByID(id string) (*domain.Order, error) {
 
 func (r *OrderRepository) GetByCustomerID(customerID string) ([]*domain.Order, error) {
 	query := `
-		SELECT id, customer_id, item_name, amount, status, created_at
+		SELECT id, customer_id, customer_email, item_name, amount, status, created_at
 		FROM orders
 		WHERE customer_id = $1
 		ORDER BY created_at DESC
@@ -84,6 +86,7 @@ func (r *OrderRepository) GetByCustomerID(customerID string) ([]*domain.Order, e
 		if err := rows.Scan(
 			&order.ID,
 			&order.CustomerID,
+			&order.CustomerEmail,
 			&order.ItemName,
 			&order.Amount,
 			&order.Status,

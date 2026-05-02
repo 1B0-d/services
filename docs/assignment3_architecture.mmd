@@ -1,0 +1,8 @@
+flowchart LR
+    Client[External Client] -->|HTTP POST /orders| Order[Order Service]
+    Order -->|stores order| OrderDB[(Order DB)]
+    Order -->|gRPC ProcessPayment| Payment[Payment Service]
+    Payment -->|stores payment| PaymentDB[(Payment DB)]
+    Payment -->|payment.completed JSON event| RabbitMQ[(RabbitMQ durable queue)]
+    RabbitMQ -->|manual ACK consumer| Notification[Notification Service]
+    RabbitMQ -->|failed messages| DLQ[(payment.completed.dlq)]

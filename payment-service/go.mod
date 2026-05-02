@@ -7,6 +7,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.1
+	github.com/rabbitmq/amqp091-go v1.10.0
 	google.golang.org/grpc v1.80.0
 )
 

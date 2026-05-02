@@ -17,8 +17,9 @@ func NewPaymentHandler(usecase *usecase.PaymentUsecase) *PaymentHandler {
 }
 
 type createPaymentRequest struct {
-	OrderID string `json:"order_id" binding:"required"`
-	Amount  int64  `json:"amount" binding:"required"`
+	OrderID       string `json:"order_id" binding:"required"`
+	CustomerEmail string `json:"customer_email" binding:"required,email"`
+	Amount        int64  `json:"amount" binding:"required"`
 }
 
 type paymentResponse struct {
@@ -27,6 +28,7 @@ type paymentResponse struct {
 	TransactionID string `json:"transaction_id"`
 	Amount        int64  `json:"amount"`
 	Status        string `json:"status"`
+	CustomerEmail string `json:"customer_email"`
 }
 
 func (h *PaymentHandler) CreatePayment(c *gin.Context) {
@@ -36,7 +38,7 @@ func (h *PaymentHandler) CreatePayment(c *gin.Context) {
 		return
 	}
 
-	payment, err := h.usecase.CreatePayment(req.OrderID, req.Amount)
+	payment, err := h.usecase.CreatePayment(req.OrderID, req.CustomerEmail, req.Amount)
 	if err != nil {
 		if err == usecase.ErrInvalidAmount {
 			c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
@@ -52,6 +54,7 @@ func (h *PaymentHandler) CreatePayment(c *gin.Context) {
 		TransactionID: payment.TransactionID,
 		Amount:        payment.Amount,
 		Status:        payment.Status,
+		CustomerEmail: payment.CustomerEmail,
 	})
 }
 
@@ -74,5 +77,6 @@ func (h *PaymentHandler) GetPaymentByOrderID(c *gin.Context) {
 		TransactionID: payment.TransactionID,
 		Amount:        payment.Amount,
 		Status:        payment.Status,
+		CustomerEmail: payment.CustomerEmail,
 	})
 }

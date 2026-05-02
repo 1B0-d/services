@@ -23,7 +23,7 @@ func NewOrderGRPCServer(usecase *usecase.OrderUsecase) *OrderGRPCServer {
 }
 
 func (s *OrderGRPCServer) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*pb.CreateOrderResponse, error) {
-	order, err := s.usecase.CreateOrder(req.CustomerId, req.ItemName, req.Amount)
+	order, err := s.usecase.CreateOrder(req.CustomerId, req.CustomerEmail, req.ItemName, req.Amount)
 	if err != nil {
 		switch err {
 		case usecase.ErrInvalidAmount:
@@ -101,12 +101,13 @@ func toOrderProto(order *domain.Order) *pb.Order {
 	}
 
 	return &pb.Order{
-		Id:         order.ID,
-		CustomerId: order.CustomerID,
-		ItemName:   order.ItemName,
-		Amount:     order.Amount,
-		Status:     toOrderStatusProto(order.Status),
-		CreatedAt:  timestamppb.New(order.CreatedAt),
+		Id:            order.ID,
+		CustomerId:    order.CustomerID,
+		CustomerEmail: order.CustomerEmail,
+		ItemName:      order.ItemName,
+		Amount:        order.Amount,
+		Status:        toOrderStatusProto(order.Status),
+		CreatedAt:     timestamppb.New(order.CreatedAt),
 	}
 }
 

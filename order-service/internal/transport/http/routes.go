@@ -7,4 +7,7 @@ func RegisterOrderRoutes(router *gin.Engine, handler *OrderHandler) {
 	router.GET("/orders/:id", handler.GetOrderByID)
 	router.PATCH("/orders/:id/cancel", handler.CancelOrder)
 	router.GET("/orders", handler.GetOrdersByCustomerID)
+	router.GET("/", func(c *gin.Context) {
+		c.JSON(200, gin.H{"message": "order-service is running"})
+	})
 }

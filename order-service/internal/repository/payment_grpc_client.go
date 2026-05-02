@@ -43,13 +43,14 @@ func (c *PaymentGRPCClient) Close() error {
 	return c.conn.Close()
 }
 
-func (c *PaymentGRPCClient) CreatePayment(orderID string, amount int64) (*domain.PaymentResult, error) {
+func (c *PaymentGRPCClient) CreatePayment(orderID, customerEmail string, amount int64) (*domain.PaymentResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	resp, err := c.client.ProcessPayment(ctx, &pb.CreatePaymentRequest{
-		OrderId: orderID,
-		Amount:  amount,
+		OrderId:       orderID,
+		Amount:        amount,
+		CustomerEmail: customerEmail,
 	})
 	if err != nil {
 		return nil, err

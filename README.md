@@ -1,358 +1,251 @@
-﻿# AP2 Assignment 1 — Order & Payment Microservices with gRPC
+# AP2 Assignment 3 - Event-Driven Order, Payment, and Notification Services
 
 ## Overview
 
-This project implements two Go microservices:
+This project implements three Go microservices:
 
 - `order-service`
 - `payment-service`
+- `notification-service`
 
-The services follow **Clean Architecture** principles and are separated by bounded contexts.
-Each service owns its own data and database.
-The internal service-to-service communication is implemented using **gRPC** and Protocol Buffers.
-External clients can still use HTTP endpoints exposed by both services.
+The client still starts the flow through `order-service`. `order-service` calls `payment-service` synchronously through gRPC. After a successful payment is stored in the payment database, `payment-service` publishes a `payment.completed` event to RabbitMQ. `notification-service` consumes that event asynchronously and simulates sending an email by writing a log line.
 
----
+## Event Flow
 
-## What Changed
+```mermaid
+flowchart LR
+    Client[External Client] -->|HTTP POST /orders| Order[Order Service]
+    Order -->|stores order| OrderDB[(Order DB)]
+    Order -->|gRPC ProcessPayment| Payment[Payment Service]
+    Payment -->|stores payment| PaymentDB[(Payment DB)]
+    Payment -->|payment.completed JSON event| RabbitMQ[(RabbitMQ durable queue)]
+    RabbitMQ -->|manual ACK consumer| Notification[Notification Service]
+    RabbitMQ -->|failed messages| DLQ[(payment.completed.dlq)]
+```
 
-This project was migrated from HTTP-based inter-service communication to gRPC.
-
-### Before the migration
-- `order-service` called `payment-service` over HTTP
-- the communication used manual JSON serialization and HTTP requests
-- the internal service call was synchronous REST
-
-### After the migration
-- protobuf contracts were added to `ap_protos/proto/`
-- generated Go code was placed in `ap-pb/`
-- `payment-service` now exposes a gRPC server with `ProcessPayment`
-- `order-service` now uses a gRPC client to call `payment-service`
-- `order-service` also exposes its own gRPC server with streaming support for order updates
-- documentation and architecture diagrams were updated accordingly
-
----
+The same diagram is also available in `docs/assignment3_architecture.mmd`.
 
 ## Service Responsibilities
 
 ### Order Service
-Responsible for:
 
-- creating orders
-- storing orders in its own database
-- calling `payment-service` to process payments
-- updating order status based on payment result
-- returning order details to clients
-- cancelling only pending orders
+- accepts external HTTP requests
+- creates orders with status `Pending`
+- calls `payment-service` through gRPC
+- updates order status to `Paid`, `Failed`, or keeps `Pending` if payment is unavailable
+- stores `customer_email` so it can be passed to the payment event
 
 HTTP endpoints:
 
 - `POST /orders`
 - `GET /orders/{id}`
+- `GET /orders?customer_id={id}`
 - `PATCH /orders/{id}/cancel`
 
 ### Payment Service
-Responsible for:
 
-- processing payment requests
-- applying payment rules
-- storing payment records in its own database
-- returning payment status for a specific order
+- processes payment requests
+- stores payments in its own database
+- publishes `payment.completed` after an authorized payment is committed
+- uses RabbitMQ publisher confirms to make sure the broker accepted the event
 
 HTTP endpoints:
 
 - `POST /payments`
 - `GET /payments/{order_id}`
 
----
+gRPC port:
 
-## How It Works Now
+- `50051`
 
-### External Client
-External clients interact with `order-service` over HTTP.
+### Notification Service
 
-### Internal Communication
-`order-service` calls `payment-service` using gRPC instead of HTTP.
+- consumes RabbitMQ queue `payment.completed`
+- does not call Order or Payment directly
+- logs simulated email sending:
 
-Order flow:
-
-1. Client sends `POST /orders` to `order-service`
-2. `order-service` creates a new order with status `Pending`
-3. `order-service` calls `payment-service` via gRPC `ProcessPayment`
-4. `payment-service` processes the payment and returns a result
-5. `order-service` updates the order status:
-   - `Paid` if payment is authorized
-   - `Failed` if payment is declined
-   - `Pending` if payment service is unavailable
-
-### gRPC Ports
-
-- `payment-service` gRPC port: `50051` (configurable with `PAYMENT_GRPC_ADDR` and `PAYMENT_GRPC_PORT`)
-- `order-service` gRPC port: `50052` (configurable with `ORDER_GRPC_PORT`)
-
-## Architecture Diagram
-
-![alt text](image-4.png)
-
-## Protobuf and Generated Code
-
-- `.proto` files are stored in `ap_protos/proto/`
-- generated Go code is stored in `ap-pb/`
-- both services use a local `replace` directive in `go.mod`:
-  `replace github.com/1B0-d/ap-pb => ../../ap-pb`
-
-## Repository Links
-
-- `proto` repository: `https://github.com/1B0-d/protos`
-- `generated` repository: `https://github.com/1B0-d/ap-pb`
-
-> Replace the URLs above with the actual GitHub repository addresses for your proto definitions and generated Go package.
-
-## Proto Generation
-
-- Run local generation inside `ap_protos/` with `make generate` or `protoc` if available.
-- Generated code is committed into `ap-pb/` so services can import it locally.
-- For the best score, add a GitHub Actions workflow that runs `protoc` remotely and updates `ap-pb/` automatically.
-
----
-
-## Clean Architecture Layers
-
-Each service follows a layered structure:
-
-- `domain` — entities, interfaces, and status constants
-- `usecase` — business logic and state transitions
-- `repository` — persistence and outbound gRPC client implementation
-- `transport/http` — HTTP handlers and routes
-- `transport/grpc` — gRPC server implementations
-- `cmd/.../main.go` — composition root and dependency wiring
-
-This structure keeps business rules separate from transport details.
-
----
-
-## Internal Flow
-
-```
-Client HTTP -> Order Service HTTP -> Order Use Case
-    -> Order Repository -> Order DB
-    -> Payment gRPC Client -> Payment Service gRPC -> Payment Use Case -> Payment DB
+```text
+[Notification] Sent email to user@example.com for Order #123. Amount: $99.99
 ```
 
----
+## RabbitMQ Reliability
 
-## Domain Models
+The queue `payment.completed` is durable, and published events use persistent delivery mode. This means RabbitMQ keeps the queue and messages across broker restarts.
 
-### Order
-- `ID`
-- `CustomerID`
-- `ItemName`
-- `Amount int64`
-- `Status`
-- `CreatedAt`
+`notification-service` uses manual ACK:
 
-Order statuses:
-- `Pending`
-- `Paid`
-- `Failed`
-- `Cancelled`
+- auto-ack is disabled
+- the message is ACKed only after the notification log is printed
+- if processing fails, the message is NACKed with `requeue=false`
+- failed messages are routed to `payment.completed.dlq`
 
-### Payment
-- `ID`
-- `OrderID`
-- `TransactionID`
-- `Amount int64`
-- `Status`
+## Idempotency Strategy
 
-Payment statuses:
-- `Authorized`
-- `Declined`
+Each event has a unique `event_id`. `notification-service` keeps an in-memory set of processed event IDs.
 
----
+- If `event_id` is new, it prints the notification log, stores the ID, then ACKs.
+- If `event_id` was already processed, it skips the email log and ACKs the duplicate.
 
-## Business Rules
+This prevents duplicate notifications when RabbitMQ redelivers a message.
 
-### Order rules
-- amount must be greater than `0`
-- only `Pending` orders can be cancelled
-- `Paid` orders cannot be cancelled
+## Graceful Shutdown
 
-### Payment rules
-- `amount > 100000` results in `Declined`
-- otherwise the payment becomes `Authorized`
+The services listen for `SIGINT` and `SIGTERM`.
 
-### Failure handling
-- if the gRPC call to `payment-service` fails, the order stays `Pending`
-- `order-service` returns `503 Service Unavailable`
+- HTTP servers call `Shutdown`.
+- gRPC servers call `GracefulStop`.
+- RabbitMQ channels and connections are closed.
+- Database pools are closed by deferred cleanup.
 
----
+## Running Everything
 
-## Project Structure
-
-```
-order-service/
-├── cmd/order-service/main.go
-├── internal/
-│   ├── domain/
-│   ├── usecase/
-│   ├── repository/
-│   ├── transport/grpc/
-│   └── transport/http/
-├── migrations/
-└── go.mod
-
-payment-service/
-├── cmd/payment-service/main.go
-├── internal/
-│   ├── domain/
-│   ├── usecase/
-│   ├── repository/
-│   ├── transport/grpc/
-   └── transport/http/
-├── migrations/
-└── go.mod
-
-ap_protos/
-├── proto/order.proto
-├── proto/payment.proto
-└── Makefile
-
-ap-pb/
-├── order/
-├── payment/
-└── go.mod
-```
-
----
-
-## Migration Summary
-
-### Main changes
-
-- replaced `PaymentHTTPClient` with `PaymentGRPCClient`
-- added gRPC server implementations in both services
-- added protobuf contracts and generated code
-- updated service wiring in `main.go`
-
-### Why gRPC
-
-- contracts are defined in `.proto` files
-- no manual JSON serialization for service-to-service calls
-- internal calls are strongly typed
-- easier to maintain and extend
-
----
-
-## Running the Services
-
-1. Start the databases:
+Start the complete environment:
 
 ```bash
 cd AP_assik1
-docker compose up -d
+docker compose up --build
 ```
 
-2. Apply SQL migrations for both services.
+Services:
 
-3. Run `payment-service`:
+- order-service HTTP: `http://localhost:8080`
+- payment-service HTTP: `http://localhost:8081`
+- payment-service gRPC: `localhost:50051`
+- order-service gRPC: `localhost:50052`
+- RabbitMQ AMQP: `localhost:5672`
+- RabbitMQ UI: `http://localhost:15672`
 
-```bash
-cd AP_assik1/payment-service
-go run ./cmd/payment-service
+RabbitMQ UI credentials:
+
+```text
+guest / guest
 ```
-
-4. Run `order-service`:
-
-```bash
-cd AP_assik1/order-service
-go run ./cmd/order-service
-```
-
----
 
 ## API Examples
-
-### HTTP examples
 
 Create an order:
 
 ```bash
 curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
-  -d '{"customer_id":"cust-1","item_name":"Laptop","amount":15000}'
+  -d '{"customer_id":"cust-1","customer_email":"user@example.com","item_name":"Laptop","amount":15000}'
 ```
 
-Get order:
+Expected result:
+
+- `order-service` returns an order with status `Paid`
+- `payment-service` stores the payment
+- `payment-service` publishes `payment.completed`
+- `notification-service` logs the simulated email
+
+Get an order:
 
 ```bash
 curl http://localhost:8080/orders/{id}
 ```
 
-Cancel pending order:
+Get orders by customer:
+
+```bash
+curl "http://localhost:8080/orders?customer_id=cust-1"
+```
+
+Cancel a pending order:
 
 ```bash
 curl -X PATCH http://localhost:8080/orders/{id}/cancel
 ```
 
-### gRPC examples
-
-Create an order via gRPC:
-
-```bash
-grpcurl -plaintext localhost:50052 order.OrderService/CreateOrder \
-  -d '{"customer_id":"cust-1","item_name":"Laptop","amount":15000}'
-```
-
 Call payment-service directly:
 
 ```bash
-grpcurl -plaintext localhost:50051 payment.PaymentService/ProcessPayment \
-  -d '{"order_id":"order-1","amount":15000}'
+curl -X POST http://localhost:8081/payments \
+  -H "Content-Type: application/json" \
+  -d '{"order_id":"order-1","customer_email":"user@example.com","amount":15000}'
 ```
 
----
-## Evidence / Screenshots
+## Protobuf Generation
 
-### 1. Successful order creation
-This screenshot shows a successful `POST /orders` request.  
-The order is created and returned with status `Paid`, which confirms that `order-service` successfully communicated with `payment-service` via gRPC.
+The protobuf contracts are stored in:
 
-![Successful order creation](docs/201_created.png)
-![alt text](image.png)
+- `../ap_protos/proto/order.proto`
+- `../ap_protos/proto/payment.proto`
 
-### 2. Get orders by customer
-This screenshot shows the `GET /orders?customer_id=...` endpoint returning all orders for a given customer.
+Generated Go code is stored in:
 
-![Get orders by customer](docs/get_method.png)
-![alt text](image-1.png)
-### 3. Real-time gRPC streaming updates
-This screenshot shows the `SubscribeToOrderUpdates` gRPC streaming call.  
-The same order is first received with status `PENDING` and then updated to `CANCELLED`, which demonstrates real-time server-side streaming.
+- `../ap-pb/order`
+- `../ap-pb/payment`
 
-![Streaming updates](docs/stream_pending_and_canceled.png)
-![alt text](image-2.png)
-### 4. Payment service unavailable handling
-This screenshot shows the case when `payment-service` is unavailable.  
-`order-service` returns `503 Service Unavailable`, and the order remains in `Pending` state.
+On Windows, regenerate with:
 
-![Payment service unavailable](docs/503_service_Unavaiable.png)
-![alt text](image-3.png)а
----
-## What is complete
+```powershell
+cd ..\ap_protos
+.\protoc-temp\bin\protoc.exe -I proto -I protoc-temp\include --go_out=..\ap-pb\payment --go_opt=paths=source_relative --go-grpc_out=..\ap-pb\payment --go-grpc_opt=paths=source_relative payment.proto
+.\protoc-temp\bin\protoc.exe -I proto -I protoc-temp\include --go_out=..\ap-pb\order --go_opt=paths=source_relative --go-grpc_out=..\ap-pb\order --go-grpc_opt=paths=source_relative order.proto
+```
 
-- internal communication migrated from HTTP to gRPC
-- HTTP APIs remain available for external clients
-- protobuf contracts and generated code are present
-- order-service calls payment-service through gRPC
-- payment-service serves gRPC requests
-- documentation reflects the new architecture
+Do not manually edit generated `.pb.go` files.
 
----
+## Project Structure
 
-## Delivered
+```text
+AP_assik1/
+├── order-service/
+├── payment-service/
+├── notification-service/
+├── docker-compose.yml
+└── docs/
 
-- source code for both services
-- SQL migrations
-- protobuf contracts
-- generated gRPC code
-- updated README
+ap_protos/
+└── proto/
+
+ap-pb/
+├── order/
+└── payment/
+```
+
+## Evidence
+
+### RabbitMQ overview
+
+Shows RabbitMQ running with service connections, queues, and a notification consumer.
+
+![RabbitMQ overview](docs/rabbitmq_overview_connected.png)
+
+### RabbitMQ queues
+
+Shows the durable `payment.completed` queue and `payment.completed.dlq`.
+
+![RabbitMQ queues](docs/rabbitmq_queues_created.png)
+
+### Notification consumer logs
+
+Shows `notification-service` listening to `payment.completed` and processing a payment event.
+
+![Notification service logs](docs/notification_service_logs.png)
+
+### Durable queue test
+
+Shows a message waiting in RabbitMQ while `notification-service` is stopped.
+
+![Durable queue message ready](docs/durable_queue_message_ready.png)
+
+### Consumer stopped
+
+Shows `notification-service` being stopped before the durable queue test.
+
+![Notification service stopped](docs/notification_service_stopped.png)
+
+## Completed Assignment 3 Requirements
+
+- RabbitMQ message broker
+- `payment-service` producer
+- `notification-service` consumer
+- durable queue
+- persistent messages
+- manual ACK
+- idempotent consumer
+- graceful shutdown
+- Docker Compose orchestration
+- architecture diagram
+- README documentation

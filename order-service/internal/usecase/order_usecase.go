@@ -29,17 +29,18 @@ func NewOrderUsecase(repo domain.OrderRepository, paymentService domain.PaymentS
 	}
 }
 
-func (u *OrderUsecase) CreateOrder(customerID, itemName string, amount int64) (*domain.Order, error) {
+func (u *OrderUsecase) CreateOrder(customerID, customerEmail, itemName string, amount int64) (*domain.Order, error) {
 	if amount <= 0 {
 		return nil, ErrInvalidAmount
 	}
 	order := &domain.Order{
-		ID:         uuid.NewString(),
-		CustomerID: customerID,
-		ItemName:   itemName,
-		Amount:     amount,
-		Status:     domain.OrderStatusPending,
-		CreatedAt:  time.Now().UTC(),
+		ID:            uuid.NewString(),
+		CustomerID:    customerID,
+		CustomerEmail: customerEmail,
+		ItemName:      itemName,
+		Amount:        amount,
+		Status:        domain.OrderStatusPending,
+		CreatedAt:     time.Now().UTC(),
 	}
 
 	if err := u.repo.Create(order); err != nil {
@@ -47,7 +48,7 @@ func (u *OrderUsecase) CreateOrder(customerID, itemName string, amount int64) (*
 	}
 	u.notifyOrderUpdate(order)
 
-	paymentResult, err := u.paymentService.CreatePayment(order.ID, order.Amount)
+	paymentResult, err := u.paymentService.CreatePayment(order.ID, order.CustomerEmail, order.Amount)
 	if err != nil {
 		_ = u.repo.UpdateStatus(order.ID, domain.OrderStatusPending)
 		return order, ErrPaymentServiceUnavailable

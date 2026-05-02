@@ -6,12 +6,13 @@ import (
 )
 
 type Order struct {
-	ID         string
-	CustomerID string
-	ItemName   string
-	Amount     int64
-	Status     string
-	CreatedAt  time.Time
+	ID            string
+	CustomerID    string
+	CustomerEmail string
+	ItemName      string
+	Amount        int64
+	Status        string
+	CreatedAt     time.Time
 }
 
 const (
@@ -37,7 +38,7 @@ type PaymentResult struct {
 }
 
 type PaymentService interface {
-	CreatePayment(orderID string, amount int64) (*PaymentResult, error)
+	CreatePayment(orderID, customerEmail string, amount int64) (*PaymentResult, error)
 }
 
 type OrderStatusPublisher interface {

@@ -1,8 +1,21 @@
 services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   order-db:
     image: postgres:16
     container_name: order-db
-    restart: always
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -11,11 +24,16 @@ services:
      - "5435:5432"
     volumes:
       - order_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d orderdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   payment-db:
     image: postgres:16
     container_name: payment-db
-    restart: always
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -24,6 +42,76 @@ services:
       - "5434:5432"
     volumes:
       - payment_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d paymentdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  payment-service:
+    build:
+      context: ..
+      dockerfile: AP_assik1/payment-service/Dockerfile
+    container_name: payment-service
+    restart: unless-stopped
+    environment:
+      PAYMENT_DB_URL: postgres://postgres:postgres@payment-db:5432/paymentdb?sslmode=disable
+      PAYMENT_SERVICE_PORT: "8081"
+      PAYMENT_GRPC_ADDR: 0.0.0.0
+      PAYMENT_GRPC_PORT: "50051"
+      PAYMENT_MIGRATION_PATH: /app/migrations/001_create_payments_table.sql
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    ports:
+      - "8081:8081"
+      - "50051:50051"
+    depends_on:
+      payment-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  order-service:
+    build:
+      context: ..
+      dockerfile: AP_assik1/order-service/Dockerfile
+    container_name: order-service
+    restart: unless-stopped
+    environment:
+      ORDER_DB_URL: postgres://postgres:postgres@order-db:5432/orderdb?sslmode=disable
+      ORDER_SERVICE_PORT: "8080"
+      ORDER_GRPC_PORT: "50052"
+      ORDER_MIGRATION_PATH: /app/migrations/001_create_payments_table.sql
+      PAYMENT_SERVICE_GRPC_ADDRESS: payment-service:50051
+    ports:
+      - "8080:8080"
+      - "50052:50052"
+    depends_on:
+      order-db:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  notification-service:
+    build:
+      context: ..
+      dockerfile: AP_assik1/notification-service/Dockerfile
+    container_name: notification-service
+    restart: unless-stopped
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
 volumes:
   order_db_data:

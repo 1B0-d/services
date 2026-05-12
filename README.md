@@ -1,39 +1,42 @@
-# AP2 Assignment 3 - Event-Driven Order, Payment, and Notification Services
+# AP2 Assignment 4 - Caching and Background Jobs
 
 ## Overview
 
-This project implements three Go microservices:
+This project contains three Go microservices:
 
 - `order-service`
 - `payment-service`
 - `notification-service`
 
-The client still starts the flow through `order-service`. `order-service` calls `payment-service` synchronously through gRPC. After a successful payment is stored in the payment database, `payment-service` publishes a `payment.completed` event to RabbitMQ. `notification-service` consumes that event asynchronously and simulates sending an email by writing a log line.
+Assignment 4 extends the previous RabbitMQ-based flow with Redis caching, Redis-backed idempotency, provider adapters, and retryable notification jobs.
 
-## Event Flow
+## Repository
+
+GitHub: https://github.com/1B0-d/services
+
+## Architecture
 
 ```mermaid
 flowchart LR
     Client[External Client] -->|HTTP POST /orders| Order[Order Service]
-    Order -->|stores order| OrderDB[(Order DB)]
+    Client -->|HTTP GET /orders/:id| Order
+    Order -->|cache lookup order:id| Redis[(Redis)]
+    Redis -->|cache hit| Order
+    Order -->|cache miss / writes| OrderDB[(Order DB)]
+    Order -->|delete order:id after status update| Redis
     Order -->|gRPC ProcessPayment| Payment[Payment Service]
     Payment -->|stores payment| PaymentDB[(Payment DB)]
     Payment -->|payment.completed JSON event| RabbitMQ[(RabbitMQ durable queue)]
-    RabbitMQ -->|manual ACK consumer| Notification[Notification Service]
-    RabbitMQ -->|failed messages| DLQ[(payment.completed.dlq)]
+    RabbitMQ -->|manual ACK consumer| Worker[Notification Worker]
+    Worker -->|check notification:payment:id| Redis
+    Worker -->|send with retry/backoff| Provider[Email Provider Adapter]
+    Provider -->|SMTP or simulated| External[External Provider]
+    RabbitMQ -->|failed after retries| DLQ[(payment.completed.dlq)]
 ```
 
-The same diagram is also available in `docs/assignment3_architecture.mmd`.
+The same diagram is available in `docs/assignment4_architecture.mmd`.
 
-## Service Responsibilities
-
-### Order Service
-
-- accepts external HTTP requests
-- creates orders with status `Pending`
-- calls `payment-service` through gRPC
-- updates order status to `Paid`, `Failed`, or keeps `Pending` if payment is unavailable
-- stores `customer_email` so it can be passed to the payment event
+## Order Service
 
 HTTP endpoints:
 
@@ -42,12 +45,19 @@ HTTP endpoints:
 - `GET /orders?customer_id={id}`
 - `PATCH /orders/{id}/cancel`
 
-### Payment Service
+`GET /orders/{id}` uses the cache-aside pattern:
 
-- processes payment requests
-- stores payments in its own database
-- publishes `payment.completed` after an authorized payment is committed
-- uses RabbitMQ publisher confirms to make sure the broker accepted the event
+1. Check Redis key `order:{id}`.
+2. On cache hit, return the cached order.
+3. On cache miss, read from PostgreSQL and store the order in Redis with `ORDER_CACHE_TTL`.
+
+Cache invalidation happens immediately after successful database status updates. When an order becomes `Paid`, `Failed`, or `Cancelled`, `order-service` deletes `order:{id}` from Redis so the next read cannot serve stale status.
+
+Bonus rate limiting is also implemented with Redis. When `ORDER_RATE_LIMIT_ENABLED=true`, requests are limited by client IP using `rate_limit:{ip}` keys. Exceeded requests return `HTTP 429`.
+
+## Payment Service
+
+`payment-service` still owns payment persistence and publishes a durable `payment.completed` event to RabbitMQ after an authorized payment is committed.
 
 HTTP endpoints:
 
@@ -58,51 +68,69 @@ gRPC port:
 
 - `50051`
 
-### Notification Service
+## Notification Service
 
-- consumes RabbitMQ queue `payment.completed`
-- does not call Order or Payment directly
-- logs simulated email sending:
+`notification-service` is a background worker. It consumes `payment.completed` messages from RabbitMQ and acknowledges a message only after the notification is handled.
 
-```text
-[Notification] Sent email to user@example.com for Order #123. Amount: $99.99
+The worker uses an adapter interface:
+
+```go
+type NotificationProvider interface {
+    SendPaymentCompleted(ctx context.Context, event PaymentCompletedEvent) error
+}
 ```
 
-## RabbitMQ Reliability
+Provider mode is configured by `PROVIDER_MODE`:
 
-The queue `payment.completed` is durable, and published events use persistent delivery mode. This means RabbitMQ keeps the queue and messages across broker restarts.
+- `SIMULATED`: sleeps for `SIMULATED_PROVIDER_LATENCY` and randomly fails using `SIMULATED_PROVIDER_FAILURE_RATE`.
+- `SMTP` or `REAL`: sends email through SMTP using `SMTP_*` variables.
 
-`notification-service` uses manual ACK:
+## Retries and Idempotency
 
-- auto-ack is disabled
-- the message is ACKed only after the notification log is printed
-- if processing fails, the message is NACKed with `requeue=false`
-- failed messages are routed to `payment.completed.dlq`
+Notification idempotency is stored in Redis by payment ID:
 
-## Idempotency Strategy
+```text
+notification:payment:{payment_id} -> sent
+```
 
-Each event has a unique `event_id`. `notification-service` keeps an in-memory set of processed event IDs.
+Before sending, the worker checks this key. If it already exists with status `sent`, the duplicate job is acknowledged and skipped.
 
-- If `event_id` is new, it prints the notification log, stores the ID, then ACKs.
-- If `event_id` was already processed, it skips the email log and ACKs the duplicate.
+Provider failures are retried with exponential backoff. With the default settings, the worker makes 4 attempts with retry delays:
 
-This prevents duplicate notifications when RabbitMQ redelivers a message.
+```text
+2s, 4s, 8s
+```
 
-## Graceful Shutdown
+If all attempts fail, the RabbitMQ message is rejected and routed to `payment.completed.dlq`.
 
-The services listen for `SIGINT` and `SIGTERM`.
+## Configuration
 
-- HTTP servers call `Shutdown`.
-- gRPC servers call `GracefulStop`.
-- RabbitMQ channels and connections are closed.
-- Database pools are closed by deferred cleanup.
+Copy `.env.example` to `.env` and adjust values if needed:
+
+```bash
+cp .env.example .env
+```
+
+Important variables:
+
+- `REDIS_ADDR`
+- `ORDER_CACHE_TTL`
+- `ORDER_RATE_LIMIT_ENABLED`
+- `ORDER_RATE_LIMIT_REQUESTS`
+- `ORDER_RATE_LIMIT_WINDOW`
+- `NOTIFICATION_IDEMPOTENCY_TTL`
+- `NOTIFICATION_RETRY_COUNT`
+- `NOTIFICATION_RETRY_BASE_DELAY`
+- `PROVIDER_MODE`
+- `SIMULATED_PROVIDER_LATENCY`
+- `SIMULATED_PROVIDER_FAILURE_RATE`
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`
 
 ## Running Everything
 
 Start the complete environment:
 
 ```bash
-cd AP_assik1
 docker compose up --build
 ```
 
@@ -114,6 +142,7 @@ Services:
 - order-service gRPC: `localhost:50052`
 - RabbitMQ AMQP: `localhost:5672`
 - RabbitMQ UI: `http://localhost:15672`
+- Redis: `localhost:6379`
 
 RabbitMQ UI credentials:
 
@@ -130,13 +159,6 @@ curl -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
   -d '{"customer_id":"cust-1","customer_email":"user@example.com","item_name":"Laptop","amount":15000}'
 ```
-
-Expected result:
-
-- `order-service` returns an order with status `Paid`
-- `payment-service` stores the payment
-- `payment-service` publishes `payment.completed`
-- `notification-service` logs the simulated email
 
 Get an order:
 
@@ -164,112 +186,24 @@ curl -X POST http://localhost:8081/payments \
   -d '{"order_id":"order-1","customer_email":"user@example.com","amount":15000}'
 ```
 
-## Protobuf Generation
+## Evidence Screenshots
 
-The protobuf contracts are stored in:
+Docker Compose starts Redis, RabbitMQ, PostgreSQL, and all three services:
 
-- `../ap_protos/proto/order.proto`
-- `../ap_protos/proto/payment.proto`
+![Assignment 4 Docker startup](docs/assignment4_docker_startup.png)
 
-Generated Go code is stored in:
+Redis contains order cache keys with TTL and notification idempotency keys. The worker logs also show successful background notification processing:
 
-- `../ap-pb/order`
-- `../ap-pb/payment`
+![Assignment 4 Redis cache and idempotency](docs/assignment4_redis_cache_idempotency.png)
 
-On Windows, regenerate with:
+## Completed Assignment 4 Requirements
 
-```powershell
-cd ..\ap_protos
-.\protoc-temp\bin\protoc.exe -I proto -I protoc-temp\include --go_out=..\ap-pb\payment --go_opt=paths=source_relative --go-grpc_out=..\ap-pb\payment --go-grpc_opt=paths=source_relative payment.proto
-.\protoc-temp\bin\protoc.exe -I proto -I protoc-temp\include --go_out=..\ap-pb\order --go_opt=paths=source_relative --go-grpc_out=..\ap-pb\order --go-grpc_opt=paths=source_relative order.proto
-```
-
-Do not manually edit generated `.pb.go` files.
-
-## Project Structure
-
-```text
-AP_assik1/
-├── order-service/
-├── payment-service/
-├── notification-service/
-├── docker-compose.yml
-└── docs/
-
-ap_protos/
-└── proto/
-
-ap-pb/
-├── order/
-└── payment/
-```
-
-## Evidence
-
-### RabbitMQ overview
-
-Shows RabbitMQ running with service connections, queues, and a notification consumer.
-
-![RabbitMQ overview](docs/rabbitmq_overview_connected.png)
-
-### RabbitMQ queues
-
-Shows the durable `payment.completed` queue and `payment.completed.dlq`.
-
-![RabbitMQ queues](docs/rabbitmq_queues_created.png)
-
-### Notification consumer logs
-
-Shows `notification-service` listening to `payment.completed` and processing a payment event.
-
-![Notification service logs](docs/notification_service_logs.png)
-
-### Durable queue test
-
-Shows a message waiting in RabbitMQ while `notification-service` is stopped.
-
-![Durable queue message ready](docs/durable_queue_message_ready.png)
-
-### Consumer stopped
-
-Shows `notification-service` being stopped before the durable queue test.
-
-![Notification service stopped](docs/notification_service_stopped.png)
-
-### Durable message delivered after restart
-
-Shows `notification-service` processing the queued message after it is started again.
-
-![Durable queue delivered after restart](docs/durable_queue_delivered_after_restart.png)
-
-### Idempotency duplicate handling
-
-Shows that the first event is processed once and duplicate deliveries with the same `event_id` are ignored.
-
-![Idempotency duplicate ignored](docs/idempotency_duplicate_ignored.png)
-
-### DLQ processing error
-
-Shows an invalid `payment.completed` event being rejected and moved to the dead-letter queue.
-
-![DLQ processing error log](docs/dlq_processing_error_log.png)
-
-### DLQ message ready
-
-Shows the failed message waiting in `payment.completed.dlq`.
-
-![DLQ message ready](docs/dlq_message_ready.png)
-
-## Completed Assignment 3 Requirements
-
-- RabbitMQ message broker
-- `payment-service` producer
-- `notification-service` consumer
-- durable queue
-- persistent messages
-- manual ACK
-- idempotent consumer
-- graceful shutdown
-- Docker Compose orchestration
-- architecture diagram
-- README documentation
+- Redis cache-aside for `GET /orders/{id}`
+- TTL-based order cache entries
+- cache invalidation after order status changes
+- Redis-backed notification idempotency by `payment_id`
+- provider adapter pattern for simulated and SMTP email providers
+- retryable notification worker with exponential backoff
+- Redis-backed API rate limiter bonus
+- Docker Compose orchestration with Redis, RabbitMQ, PostgreSQL, and all services
+- updated architecture diagram and documentation

@@ -18,7 +18,6 @@
 *.iml
 
 # Go
-go.sum
 vendor/
 
 # Build & Development

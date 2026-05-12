@@ -1,0 +1,15 @@
+flowchart LR
+    Client[External Client] -->|HTTP POST /orders| Order[Order Service]
+    Client -->|HTTP GET /orders/:id| Order
+    Order -->|cache lookup order:id| Redis[(Redis)]
+    Redis -->|cache hit| Order
+    Order -->|cache miss / writes| OrderDB[(Order DB)]
+    Order -->|delete order:id after status update| Redis
+    Order -->|gRPC ProcessPayment| Payment[Payment Service]
+    Payment -->|stores payment| PaymentDB[(Payment DB)]
+    Payment -->|payment.completed JSON event| RabbitMQ[(RabbitMQ durable queue)]
+    RabbitMQ -->|manual ACK consumer| Worker[Notification Worker]
+    Worker -->|check notification:payment:id| Redis
+    Worker -->|send with retry/backoff| Provider[Email Provider Adapter]
+    Provider -->|SMTP or simulated| External[External Provider]
+    RabbitMQ -->|failed after retries| DLQ[(payment.completed.dlq)]

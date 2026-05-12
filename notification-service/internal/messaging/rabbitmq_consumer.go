@@ -22,7 +22,7 @@ const (
 )
 
 type PaymentCompletedHandler interface {
-	HandlePaymentCompleted(event domain.PaymentCompletedEvent) error
+	HandlePaymentCompleted(ctx context.Context, event domain.PaymentCompletedEvent) error
 }
 
 type RabbitMQConsumer struct {
@@ -77,7 +77,7 @@ func (c *RabbitMQConsumer) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			c.handleDelivery(delivery)
+			c.handleDelivery(ctx, delivery)
 		}
 	}
 }
@@ -96,7 +96,7 @@ func (c *RabbitMQConsumer) Close() error {
 	return nil
 }
 
-func (c *RabbitMQConsumer) handleDelivery(delivery amqp.Delivery) {
+func (c *RabbitMQConsumer) handleDelivery(ctx context.Context, delivery amqp.Delivery) {
 	var event domain.PaymentCompletedEvent
 	if err := json.Unmarshal(delivery.Body, &event); err != nil {
 		log.Printf("invalid payment.completed message moved to DLQ: %v", err)
@@ -104,7 +104,7 @@ func (c *RabbitMQConsumer) handleDelivery(delivery amqp.Delivery) {
 		return
 	}
 
-	if err := c.handler.HandlePaymentCompleted(event); err != nil {
+	if err := c.handler.HandlePaymentCompleted(ctx, event); err != nil {
 		log.Printf("failed to process payment.completed event %s; moving to DLQ: %v", event.EventID, err)
 		_ = delivery.Nack(false, false)
 		return

@@ -1,6 +1,14 @@
 package idempotency
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
+
+type Store interface {
+	AlreadyProcessed(ctx context.Context, paymentID string) (bool, error)
+	MarkProcessed(ctx context.Context, paymentID string) error
+}
 
 type MemoryStore struct {
 	mu        sync.Mutex
@@ -13,17 +21,18 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
-func (s *MemoryStore) AlreadyProcessed(id string) bool {
+func (s *MemoryStore) AlreadyProcessed(ctx context.Context, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	_, ok := s.processed[id]
-	return ok
+	return ok, nil
 }
-	
-func (s *MemoryStore) MarkProcessed(id string) {
+
+func (s *MemoryStore) MarkProcessed(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.processed[id] = struct{}{}
+	return nil
 }

@@ -32,6 +32,12 @@ type OrderRepository interface {
 	GetByCustomerID(customerID string) ([]*Order, error)
 }
 
+type OrderCache interface {
+	GetByID(id string) (*Order, bool, error)
+	Set(order *Order) error
+	DeleteByID(id string) error
+}
+
 type PaymentResult struct {
 	Status        string
 	TransactionID string

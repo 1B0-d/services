@@ -8,13 +8,16 @@ import (
 	stdhttp "net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 
+	ordercache "order-service/internal/cache"
 	"order-service/internal/pubsub"
 	"order-service/internal/repository"
 	transportgrpc "order-service/internal/transport/grpc"
@@ -28,6 +31,10 @@ func main() {
 	dbURL := getEnv("ORDER_DB_URL", "postgres://postgres:postgres@localhost:5435/orderdb?sslmode=disable")
 	port := getEnv("ORDER_SERVICE_PORT", "8080")
 	migrationPath := getEnv("ORDER_MIGRATION_PATH", "migrations/001_create_payments_table.sql")
+	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
+	redisPassword := os.Getenv("REDIS_PASSWORD")
+	redisDB := getEnvAsInt("REDIS_DB", 0)
+	cacheTTL := getEnvAsDuration("ORDER_CACHE_TTL", 5*time.Minute)
 	paymentServiceGRPCAddress := os.Getenv("PAYMENT_SERVICE_GRPC_ADDRESS")
 	if paymentServiceGRPCAddress == "" {
 		paymentServiceGRPCHost := getEnv("PAYMENT_GRPC_ADDR", "localhost")
@@ -55,7 +62,24 @@ func main() {
 		log.Fatalf("failed to run order migrations: %v", err)
 	}
 
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     redisAddr,
+		Password: redisPassword,
+		DB:       redisDB,
+	})
+	defer func() {
+		_ = redisClient.Close()
+	}()
+
+	redisCtx, redisCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := redisClient.Ping(redisCtx).Err(); err != nil {
+		redisCancel()
+		log.Fatalf("failed to connect to redis: %v", err)
+	}
+	redisCancel()
+
 	orderRepo := repository.NewOrderRepository(dbpool)
+	orderCache := ordercache.NewRedisOrderCache(redisClient, cacheTTL)
 
 	paymentClient, err := repository.NewPaymentGRPCClient(paymentServiceGRPCAddress)
 	if err != nil {
@@ -66,7 +90,7 @@ func main() {
 	}()
 
 	notifier := pubsub.NewOrderStatusBroadcaster()
-	orderUsecase := usecase.NewOrderUsecase(orderRepo, paymentClient, notifier)
+	orderUsecase := usecase.NewOrderUsecase(orderRepo, paymentClient, notifier, orderCache)
 	orderHandler := transporthttp.NewOrderHandler(orderUsecase)
 
 	orderGRPCPort := getEnv("ORDER_GRPC_PORT", "50052")
@@ -89,6 +113,13 @@ func main() {
 	}()
 
 	router := gin.Default()
+	if getEnvAsBool("ORDER_RATE_LIMIT_ENABLED", false) {
+		router.Use(transporthttp.NewRedisRateLimiter(
+			redisClient,
+			int64(getEnvAsInt("ORDER_RATE_LIMIT_REQUESTS", 10)),
+			getEnvAsDuration("ORDER_RATE_LIMIT_WINDOW", time.Minute),
+		))
+	}
 	transporthttp.RegisterOrderRoutes(router, orderHandler)
 
 	httpServer := &stdhttp.Server{
@@ -137,4 +168,46 @@ func getEnv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func getEnvAsInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		log.Printf("invalid %s=%q, using %d", key, value, fallback)
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvAsBool(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		log.Printf("invalid %s=%q, using %t", key, value, fallback)
+		return fallback
+	}
+	return parsed
+}
+
+func getEnvAsDuration(key string, fallback time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		log.Printf("invalid %s=%q, using %s", key, value, fallback)
+		return fallback
+	}
+	return parsed
 }

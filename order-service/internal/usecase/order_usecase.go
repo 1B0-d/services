@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,16 +18,21 @@ var ErrPaymentServiceUnavailable = errors.New("payment service unavailable")
 
 type OrderUsecase struct {
 	repo           domain.OrderRepository
+	cache          domain.OrderCache
 	paymentService domain.PaymentService
 	publisher      domain.OrderStatusPublisher
 }
 
-func NewOrderUsecase(repo domain.OrderRepository, paymentService domain.PaymentService, publisher domain.OrderStatusPublisher) *OrderUsecase {
-	return &OrderUsecase{
+func NewOrderUsecase(repo domain.OrderRepository, paymentService domain.PaymentService, publisher domain.OrderStatusPublisher, orderCache ...domain.OrderCache) *OrderUsecase {
+	usecase := &OrderUsecase{
 		repo:           repo,
 		paymentService: paymentService,
 		publisher:      publisher,
 	}
+	if len(orderCache) > 0 {
+		usecase.cache = orderCache[0]
+	}
+	return usecase
 }
 
 func (u *OrderUsecase) CreateOrder(customerID, customerEmail, itemName string, amount int64) (*domain.Order, error) {
@@ -50,7 +56,9 @@ func (u *OrderUsecase) CreateOrder(customerID, customerEmail, itemName string, a
 
 	paymentResult, err := u.paymentService.CreatePayment(order.ID, order.CustomerEmail, order.Amount)
 	if err != nil {
-		_ = u.repo.UpdateStatus(order.ID, domain.OrderStatusPending)
+		if updateErr := u.repo.UpdateStatus(order.ID, domain.OrderStatusPending); updateErr == nil {
+			u.invalidateOrderCache(order.ID)
+		}
 		return order, ErrPaymentServiceUnavailable
 	}
 
@@ -58,6 +66,7 @@ func (u *OrderUsecase) CreateOrder(customerID, customerEmail, itemName string, a
 		if err := u.repo.UpdateStatus(order.ID, domain.OrderStatusPaid); err != nil {
 			return nil, err
 		}
+		u.invalidateOrderCache(order.ID)
 		order.Status = domain.OrderStatusPaid
 		u.notifyOrderUpdate(order)
 		return order, nil
@@ -66,6 +75,7 @@ func (u *OrderUsecase) CreateOrder(customerID, customerEmail, itemName string, a
 	if err := u.repo.UpdateStatus(order.ID, domain.OrderStatusFailed); err != nil {
 		return nil, err
 	}
+	u.invalidateOrderCache(order.ID)
 	order.Status = domain.OrderStatusFailed
 	u.notifyOrderUpdate(order)
 
@@ -73,6 +83,16 @@ func (u *OrderUsecase) CreateOrder(customerID, customerEmail, itemName string, a
 }
 
 func (u *OrderUsecase) GetOrderByID(id string) (*domain.Order, error) {
+	if u.cache != nil {
+		order, ok, err := u.cache.GetByID(id)
+		if err != nil {
+			log.Printf("order cache read failed for %s: %v", id, err)
+		}
+		if ok {
+			return order, nil
+		}
+	}
+
 	order, err := u.repo.GetByID(id)
 	if err != nil {
 		return nil, err
@@ -80,6 +100,8 @@ func (u *OrderUsecase) GetOrderByID(id string) (*domain.Order, error) {
 	if order == nil {
 		return nil, ErrOrderNotFound
 	}
+
+	u.cacheOrder(order)
 	return order, nil
 }
 func (u *OrderUsecase) GetOrdersByCustomerID(customerID string) ([]*domain.Order, error) {
@@ -102,6 +124,7 @@ func (u *OrderUsecase) CancelOrder(id string) (*domain.Order, error) {
 		return nil, err
 	}
 
+	u.invalidateOrderCache(id)
 	order.Status = domain.OrderStatusCancelled
 	u.notifyOrderUpdate(order)
 	return order, nil
@@ -119,4 +142,22 @@ func (u *OrderUsecase) notifyOrderUpdate(order *domain.Order) {
 		return
 	}
 	_ = u.publisher.Publish(order)
+}
+
+func (u *OrderUsecase) cacheOrder(order *domain.Order) {
+	if u.cache == nil {
+		return
+	}
+	if err := u.cache.Set(order); err != nil {
+		log.Printf("order cache write failed for %s: %v", order.ID, err)
+	}
+}
+
+func (u *OrderUsecase) invalidateOrderCache(id string) {
+	if u.cache == nil {
+		return
+	}
+	if err := u.cache.DeleteByID(id); err != nil {
+		log.Printf("order cache invalidation failed for %s: %v", id, err)
+	}
 }

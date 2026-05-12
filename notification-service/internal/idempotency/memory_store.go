@@ -20,7 +20,7 @@ func (s *MemoryStore) AlreadyProcessed(id string) bool {
 	_, ok := s.processed[id]
 	return ok
 }
-
+	
 func (s *MemoryStore) MarkProcessed(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

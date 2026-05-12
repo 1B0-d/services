@@ -6,6 +6,8 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -114,5 +116,6 @@ services:
         condition: service_healthy
 
 volumes:
+  rabbitmq_data:
   order_db_data:
   payment_db_data:
